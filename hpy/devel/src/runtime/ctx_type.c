@@ -875,14 +875,17 @@ create_slot_defs(HPyType_Spec *hpyspec, HPyType_Extra_t *extra,
 
 #if HPY_HAS_MANAGED_DICT
     /* On Python 3.13+, we always need tp_traverse and tp_clear to handle
-     * the managed dict properly. Py_TPFLAGS_MANAGED_DICT is inherited from
-     * object, and requires calling PyObject_VisitManagedDict/ClearManagedDict.
+     * the managed dict properly. Unlike what the Python docs suggest,
+     * Py_TPFLAGS_MANAGED_DICT is NOT automatically inherited from object
+     * when using PyType_FromSpec - we must set it explicitly.
+     * 
+     * Setting MANAGED_DICT requires calling PyObject_VisitManagedDict/ClearManagedDict
+     * in traverse/clear, which we do in hpytype_traverse and hpytype_clear.
      * If user provides HPy_tp_traverse, their trampoline handles managed dict
      * via call_traverseproc_from_trampoline. Otherwise, add hpytype_traverse.
      *
-     * IMPORTANT: Py_TPFLAGS_MANAGED_DICT requires Py_TPFLAGS_HAVE_GC to be set.
-     * Since managed dict is inherited from object, we must ensure HAVE_GC is set. */
-    *flags |= Py_TPFLAGS_HAVE_GC;
+     * IMPORTANT: Py_TPFLAGS_MANAGED_DICT requires Py_TPFLAGS_HAVE_GC to be set. */
+    *flags |= Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_MANAGED_DICT;
     if (!has_tp_traverse(hpyspec)) {
         result[dst_idx++] = (PyType_Slot){Py_tp_traverse, (void*)hpytype_traverse};
     }
@@ -1477,15 +1480,18 @@ ctx_New(HPyContext *ctx, HPy h_type, void **data)
     }
 
     PyObject *result;
-    if (PyType_IS_GC(tp))
+    int is_gc = PyType_IS_GC(tp);
+    if (is_gc) {
         result = PyObject_GC_New(PyObject, tp);
-    else
+    } else {
         result = PyObject_New(PyObject, tp);
+    }
 
     // HPy_New guarantees that the memory is zeroed, but PyObject_{GC}_New
     // doesn't. But we need to make sure to NOT overwrite ob_refcnt and
     // ob_type. See test_HPy_New_initialize_to_zero
     const HPyType_BuiltinShape shape = _HPyType_Get_Shape(tp);
+    
     HPy_ssize_t payload_size;
     void *payload;
     if (shape != HPyType_BuiltinShape_Legacy) {
